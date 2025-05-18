@@ -6,19 +6,31 @@ on:
     - cron: '0 0 * * *'  # 每日自动执行
 
 env:
-  REPO_LIST: "jianghuaangte/test neovim/neovim"  # 要同步的仓库列表
+  REPO_LIST: "jianghuaangte/test neovim/neovim"
 
 jobs:
   sync-releases:
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai  # 设置时区
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    - name: Generate timestamp
-      id: timestamp
-      run: echo "tag_name=release-$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+    - name: Setup timezone
+      run: sudo timedatectl set-timezone $TZ
+
+    - name: Generate metadata
+      id: metadata
+      run: |
+        # 生成带时区的日期
+        current_date=$(date +%Y-%m-%d)
+        timestamp=$(date +%Y%m%d%H%M%S)
+        # 添加随机后缀防止标签冲突
+        random_suffix=$(openssl rand -hex 3)
+        echo "tag_name=release-${timestamp}-${random_suffix}" >> $GITHUB_OUTPUT
+        echo "release_date=$current_date" >> $GITHUB_OUTPUT
 
     - name: Download and process assets
       run: |
@@ -44,30 +56,36 @@ jobs:
           # 处理每个文件
           for file in *; do
             if [ -f "$file" ]; then
-              # 添加仓库前缀防止文件名冲突
               new_file="${REPO_DIR}_${file}"
               mv "$file" "$new_file"
               
               filesize=$(stat -c %s "$new_file")
               if [ $filesize -gt 104857600 ]; then
                 echo "Splitting $new_file (size: $(numfmt --to=iec $filesize))"
-                split -b 100M "$new_file" "${new_file}.part."
-                rm "$new_file"
+                # 使用更可靠的分割方式
+                split -d -b 99M "$new_file" "${new_file}.part."
+                # 强制删除原文件
+                rm -f "$new_file"
                 
-                # 生成分块校验和
+                # 验证分割结果
+                if ls "${new_file}.part."* >/dev/null 2>&1; then
+                  echo "Split successful, original file removed"
+                else
+                  echo "Split failed!" && exit 1
+                fi
+
+                # 生成校验和
                 for part in "${new_file}.part."*; do
                   sha256sum "$part" | tee -a checksums.txt
                   mv "$part" ../../artifacts/
                 done
               else
-                # 生成完整文件校验和
                 sha256sum "$new_file" | tee -a checksums.txt
                 mv "$new_file" ../../artifacts/
               fi
             fi
           done
           
-          # 合并校验文件
           if [ -f checksums.txt ]; then
             cat checksums.txt >> ../../artifacts/checksums.txt
           fi
@@ -81,11 +99,12 @@ jobs:
         gitee_owner: ${{ secrets.GITEE_OWNER }}
         gitee_repo: ${{ secrets.GITEE_REPO }}
         gitee_token: ${{ secrets.GITEE_TOKEN }}
-        gitee_tag_name: ${{ steps.timestamp.outputs.tag_name }}
-        gitee_release_name: "Synced Releases ($(date +%Y-%m-%d))"
+        gitee_tag_name: ${{ steps.metadata.outputs.tag_name }}
+        gitee_release_name: "Synced Releases (${{ steps.metadata.outputs.release_date }})"  # 使用正确变量
         gitee_release_body: |-
           Automatically synced releases from GitHub.
           Contains assets from: ${{ env.REPO_LIST }}
+          Generated at: $(date -d @$(date +%s)  # 显示精确时间
         gitee_target_commitish: master
 
     - name: Upload artifacts
