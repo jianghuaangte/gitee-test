@@ -6,7 +6,7 @@ on:
     - cron: '0 0 * * *'  # 每日自动执行
 
 env:
-  REPO_LIST: "vnt-dev/vnt neovim/neovim"  # 要同步的仓库列表
+  REPO_LIST: "jianghuaangte/test neovim/neovim"  # 要同步的仓库列表
 
 jobs:
   sync-releases:
